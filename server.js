@@ -373,7 +373,11 @@ async function handleHttpRequest(conn, scheme = 'http') {
   }
 
   const host = req.headers['host'] || conn.dstIp;
-  const url = `${scheme}://${host}${req.path}`;
+  // If Netscape is in proxy mode, req.path is already an absolute URL (e.g. "http://example.com/path").
+  // Prepending scheme://host would corrupt it — use it as-is.
+  const url = (req.path.startsWith('http://') || req.path.startsWith('https://'))
+    ? req.path
+    : `${scheme}://${host}${req.path}`;
 
   // Navigation intercept: GET http://10.0.0.1/nav/<path>
   // Reply with a 200 OK to the Mac (so OT/Netscape doesn't hang),
