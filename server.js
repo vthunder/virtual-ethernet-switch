@@ -447,7 +447,10 @@ async function handleHttpRequest(conn, scheme = 'http') {
     statusCode = result.status;
     statusText = http.STATUS_CODES[statusCode] || 'Unknown';
     responseBody = result.body;
-    contentType = result.headers['content-type'] || 'application/octet-stream';
+    // Strip charset and other parameters — Netscape 2.02 doesn't parse them and
+    // treats "text/html; charset=UTF-8" as an unknown type, triggering save-as-file.
+    const rawContentType = result.headers['content-type'] || 'application/octet-stream';
+    contentType = rawContentType.split(';')[0].trim();
 
     console.log(`${ts()} HTTP ${req.method} ${url}  → ${statusCode} ${statusText}  ${responseBody.length}b  ${contentType}`);
   } catch (e) {
