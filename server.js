@@ -311,9 +311,11 @@ function fetchViaProxy(url, reqHeaders) {
   return new Promise((resolve, reject) => {
     const proxyUrl = new URL(RETRO_PROXY_URL);
 
+    const isHttps = proxyUrl.protocol === 'https:';
+    const defaultPort = isHttps ? 443 : 80;
     const options = {
       hostname: proxyUrl.hostname,
-      port: parseInt(proxyUrl.port || '80', 10),
+      port: parseInt(proxyUrl.port || String(defaultPort), 10),
       // Forward proxy protocol: absolute URI as the path
       path: url,
       method: 'GET',
@@ -324,7 +326,8 @@ function fetchViaProxy(url, reqHeaders) {
       },
     };
 
-    const req = http.request(options, (res) => {
+    const transport = isHttps ? https : http;
+    const req = transport.request(options, (res) => {
       const chunks = [];
       res.on('data', c => chunks.push(c));
       res.on('end', () => resolve({
