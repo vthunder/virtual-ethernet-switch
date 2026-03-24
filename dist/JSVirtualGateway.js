@@ -11,7 +11,7 @@ var __classPrivateFieldGet = (this && this.__classPrivateFieldGet) || function (
     if (typeof state === "function" ? receiver !== state || !f : !state.has(receiver)) throw new TypeError("Cannot read private member from an object whose class did not declare it");
     return kind === "m" ? f : kind === "a" ? f.call(receiver) : f ? f.value : state.get(receiver);
 };
-var _JSVirtualGateway_instances, _JSVirtualGateway_send, _JSVirtualGateway_proxyBaseUrl, _JSVirtualGateway_tcpConns, _JSVirtualGateway_macAddress, _JSVirtualGateway_handleArp, _JSVirtualGateway_handleIp, _JSVirtualGateway_sendIcmpEchoReply, _JSVirtualGateway_handleUdp, _JSVirtualGateway_sendDhcpReply, _JSVirtualGateway_handleDns, _JSVirtualGateway_handleTcp, _JSVirtualGateway_handleHttp, _JSVirtualGateway_sendHttpResponse, _JSVirtualGateway_fetchViaProxy, _JSVirtualGateway_sendFrame;
+var _JSVirtualGateway_instances, _JSVirtualGateway_send, _JSVirtualGateway_proxyBaseUrl, _JSVirtualGateway_tcpConns, _JSVirtualGateway_macAddress, _JSVirtualGateway_handleArp, _JSVirtualGateway_handleIp, _JSVirtualGateway_sendIcmpEchoReply, _JSVirtualGateway_handleUdp, _JSVirtualGateway_sendDhcpReply, _JSVirtualGateway_handleDns, _JSVirtualGateway_handleTcp, _JSVirtualGateway_handleHttp, _JSVirtualGateway_sendHttpResponse, _JSVirtualGateway_drainPending, _JSVirtualGateway_fetchViaProxy, _JSVirtualGateway_sendFrame;
 import { TcpConn } from './TcpConn.js';
 import { GW_IP, MAC_IP, GW_MAC, TCP_FLAGS, ipToString, ipBytesFromString, buildEthernetFrame, buildArpReply, buildIpTcpPacket, buildIpUdpPacket, buildIcmpPing, parseDhcpMsgType, buildDhcpReply, buildDnsAReply, dnsExtractQname, ipChecksum, } from './ethernet-utils.js';
 const GW_IP_STR = GW_IP.join('.');
@@ -168,6 +168,8 @@ _JSVirtualGateway_send = new WeakMap(), _JSVirtualGateway_proxyBaseUrl = new Wea
     const srcPort = tcpView.getUint16(0);
     const dstPort = tcpView.getUint16(2);
     const seqNum = tcpView.getUint32(4);
+    const ackNum = tcpView.getUint32(8); // what client has ACKed
+    const windowSize = tcpView.getUint16(14); // client's advertised receive window
     const tcpFlags = tcp[13];
     const dataOffset = ((tcp[12] >> 4) & 0xf) * 4;
     const tcpData = tcp.slice(dataOffset);
@@ -200,9 +202,11 @@ _JSVirtualGateway_send = new WeakMap(), _JSVirtualGateway_proxyBaseUrl = new Wea
         });
         conn.send = makeSendFn(conn);
         conn.clientSeq = (seqNum + 1) >>> 0;
+        conn.recvWindow = windowSize;
         __classPrivateFieldGet(this, _JSVirtualGateway_tcpConns, "f").set(connKey, conn);
         conn.send(TCP_FLAGS.SYN | TCP_FLAGS.ACK);
         conn.serverSeq = (conn.serverSeq + 1) >>> 0;
+        conn.lastAckedSeq = conn.serverSeq;
         conn.state = 'ESTABLISHED';
         console.log(`[gw] TCP  SYN  ${connKey} → SYN-ACK`);
         // Port 23 telnet banner
@@ -239,6 +243,11 @@ _JSVirtualGateway_send = new WeakMap(), _JSVirtualGateway_proxyBaseUrl = new Wea
             // Echo back
             conn.send(TCP_FLAGS.ACK | TCP_FLAGS.PSH, tcpData);
         }
+    }
+    if (isAck) {
+        conn.lastAckedSeq = ackNum;
+        conn.recvWindow = windowSize;
+        __classPrivateFieldGet(this, _JSVirtualGateway_instances, "m", _JSVirtualGateway_drainPending).call(this, conn);
     }
     if (isFin) {
         conn.clientSeq = (conn.clientSeq + 1) >>> 0;
@@ -312,12 +321,36 @@ async function _JSVirtualGateway_handleHttp(conn, scheme) {
     const full = new Uint8Array(header.length + body.length);
     full.set(header);
     full.set(body, header.length);
-    for (let offset = 0; offset < full.length; offset += CHUNK_SIZE) {
-        const chunk = full.slice(offset, offset + CHUNK_SIZE);
+    conn.pendingSend = full;
+    conn.pendingOffset = 0;
+    conn.onAllSent = () => {
+        conn.send(TCP_FLAGS.FIN | TCP_FLAGS.ACK);
+        conn.state = 'FIN_SENT';
+    };
+    __classPrivateFieldGet(this, _JSVirtualGateway_instances, "m", _JSVirtualGateway_drainPending).call(this, conn);
+}, _JSVirtualGateway_drainPending = function _JSVirtualGateway_drainPending(conn) {
+    if (!conn.pendingSend)
+        return;
+    const full = conn.pendingSend;
+    while (conn.pendingOffset < full.length) {
+        // Available window: signed 32-bit difference handles seq number wraparound
+        const windowEnd = (conn.lastAckedSeq + conn.recvWindow) >>> 0;
+        const available = (windowEnd - conn.serverSeq) | 0; // signed
+        if (available <= 0)
+            return; // window full — wait for next ACK
+        const remaining = full.length - conn.pendingOffset;
+        const sendSize = Math.min(CHUNK_SIZE, remaining, available);
+        const chunk = full.slice(conn.pendingOffset, conn.pendingOffset + sendSize);
         conn.send(TCP_FLAGS.ACK | TCP_FLAGS.PSH, chunk);
+        conn.pendingOffset += sendSize;
     }
-    conn.send(TCP_FLAGS.FIN | TCP_FLAGS.ACK);
-    conn.state = 'FIN_SENT';
+    // All data sent
+    conn.pendingSend = null;
+    if (conn.onAllSent) {
+        const cb = conn.onAllSent;
+        conn.onAllSent = null;
+        cb();
+    }
 }, _JSVirtualGateway_fetchViaProxy = 
 // ── Proxy fetch ───────────────────────────────────────────────────────────────
 async function _JSVirtualGateway_fetchViaProxy(url) {

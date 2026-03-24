@@ -5,6 +5,11 @@ export declare class TcpConn {
     clientSeq: number;
     recvBuf: Uint8Array;
     httpHandled: boolean;
+    recvWindow: number;
+    lastAckedSeq: number;
+    pendingSend: Uint8Array | null;
+    pendingOffset: number;
+    onAllSent: (() => void) | null;
     srcIp: string;
     srcPort: number;
     dstIp: string;

@@ -8,11 +8,7 @@
     "dist/"
   ],
   "scripts": {
-    "build": "tsc",
-    "start": "node server.js",
-    "arp": "CHECKPOINT=2 node server.js",
-    "tcp": "CHECKPOINT=3 node server.js",
-    "proxy": "CHECKPOINT=4 node server.js"
+    "build": "tsc"
   },
   "dependencies": {
     "ws": "^8.17.0"

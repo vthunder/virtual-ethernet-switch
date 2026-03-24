@@ -5,6 +5,11 @@ export class TcpConn {
         this.clientSeq = 0;
         this.recvBuf = new Uint8Array(0);
         this.httpHandled = false;
+        this.recvWindow = 65535; // client's current advertised receive window
+        this.lastAckedSeq = 0; // last ack number client sent us (what they've confirmed received)
+        this.pendingSend = null; // buffered response waiting to drain
+        this.pendingOffset = 0; // bytes of pendingSend already sent
+        this.onAllSent = null; // called when all data flushed (sends FIN)
         this.srcIp = opts.srcIp;
         this.srcPort = opts.srcPort;
         this.dstIp = opts.dstIp;

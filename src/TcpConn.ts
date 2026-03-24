@@ -9,6 +9,12 @@ export class TcpConn {
   recvBuf: Uint8Array = new Uint8Array(0);
   httpHandled: boolean = false;
 
+  recvWindow: number = 65535;         // client's current advertised receive window
+  lastAckedSeq: number = 0;           // last ack number client sent us (what they've confirmed received)
+  pendingSend: Uint8Array | null = null;  // buffered response waiting to drain
+  pendingOffset: number = 0;          // bytes of pendingSend already sent
+  onAllSent: (() => void) | null = null; // called when all data flushed (sends FIN)
+
   srcIp: string;
   srcPort: number;
   dstIp: string;

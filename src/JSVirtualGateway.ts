@@ -199,6 +199,8 @@ export class JSVirtualGateway {
     const srcPort = tcpView.getUint16(0);
     const dstPort = tcpView.getUint16(2);
     const seqNum  = tcpView.getUint32(4);
+    const ackNum   = tcpView.getUint32(8);   // what client has ACKed
+    const windowSize = tcpView.getUint16(14); // client's advertised receive window
     const tcpFlags = tcp[13];
     const dataOffset = ((tcp[12] >> 4) & 0xf) * 4;
     const tcpData = tcp.slice(dataOffset);
@@ -233,10 +235,12 @@ export class JSVirtualGateway {
       });
       conn.send = makeSendFn(conn);
       conn.clientSeq = (seqNum + 1) >>> 0;
+      conn.recvWindow = windowSize;
       this.#tcpConns.set(connKey, conn);
 
       conn.send(TCP_FLAGS.SYN | TCP_FLAGS.ACK);
       conn.serverSeq = (conn.serverSeq + 1) >>> 0;
+      conn.lastAckedSeq = conn.serverSeq;
       conn.state = 'ESTABLISHED';
       console.log(`[gw] TCP  SYN  ${connKey} → SYN-ACK`);
 
@@ -279,6 +283,12 @@ export class JSVirtualGateway {
         // Echo back
         conn.send(TCP_FLAGS.ACK | TCP_FLAGS.PSH, tcpData);
       }
+    }
+
+    if (isAck) {
+      conn.lastAckedSeq = ackNum;
+      conn.recvWindow = windowSize;
+      this.#drainPending(conn);
     }
 
     if (isFin) {
@@ -371,12 +381,39 @@ export class JSVirtualGateway {
     full.set(header);
     full.set(body, header.length);
 
-    for (let offset = 0; offset < full.length; offset += CHUNK_SIZE) {
-      const chunk = full.slice(offset, offset + CHUNK_SIZE);
+    conn.pendingSend = full;
+    conn.pendingOffset = 0;
+    conn.onAllSent = () => {
+      conn.send(TCP_FLAGS.FIN | TCP_FLAGS.ACK);
+      conn.state = 'FIN_SENT';
+    };
+    this.#drainPending(conn);
+  }
+
+  #drainPending(conn: TcpConn): void {
+    if (!conn.pendingSend) return;
+    const full = conn.pendingSend;
+
+    while (conn.pendingOffset < full.length) {
+      // Available window: signed 32-bit difference handles seq number wraparound
+      const windowEnd = (conn.lastAckedSeq + conn.recvWindow) >>> 0;
+      const available = (windowEnd - conn.serverSeq) | 0; // signed
+      if (available <= 0) return; // window full — wait for next ACK
+
+      const remaining = full.length - conn.pendingOffset;
+      const sendSize = Math.min(CHUNK_SIZE, remaining, available);
+      const chunk = full.slice(conn.pendingOffset, conn.pendingOffset + sendSize);
       conn.send(TCP_FLAGS.ACK | TCP_FLAGS.PSH, chunk);
+      conn.pendingOffset += sendSize;
     }
-    conn.send(TCP_FLAGS.FIN | TCP_FLAGS.ACK);
-    conn.state = 'FIN_SENT';
+
+    // All data sent
+    conn.pendingSend = null;
+    if (conn.onAllSent) {
+      const cb = conn.onAllSent;
+      conn.onAllSent = null;
+      cb();
+    }
   }
 
   // ── Proxy fetch ───────────────────────────────────────────────────────────────
