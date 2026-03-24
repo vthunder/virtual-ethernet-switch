@@ -393,30 +393,30 @@ export class JSVirtualGateway {
 
   #drainPending(conn: TcpConn): void {
     if (!conn.pendingSend) return;
-    const connKey = `${conn.srcIp}:${conn.srcPort}→${conn.dstIp}:${conn.dstPort}`;
-    console.log(`[gw] TCP  DRAIN ${connKey}  offset=${conn.pendingOffset}/${conn.pendingSend!.length} window=${conn.recvWindow} avail=${((conn.lastAckedSeq + conn.recvWindow) >>> 0) - conn.serverSeq | 0}`);
     const full = conn.pendingSend;
 
-    while (conn.pendingOffset < full.length) {
-      // Available window: signed 32-bit difference handles seq number wraparound
-      const windowEnd = (conn.lastAckedSeq + conn.recvWindow) >>> 0;
-      const available = (windowEnd - conn.serverSeq) | 0; // signed
-      if (available <= 0) return; // window full — wait for next ACK
+    const windowEnd = (conn.lastAckedSeq + conn.recvWindow) >>> 0;
+    const available = (windowEnd - conn.serverSeq) | 0;
+    if (available <= 0) return; // window full — wait for next ACK
 
-      const remaining = full.length - conn.pendingOffset;
-      const sendSize = Math.min(CHUNK_SIZE, remaining, available);
-      const chunk = full.slice(conn.pendingOffset, conn.pendingOffset + sendSize);
-      conn.send(TCP_FLAGS.ACK | TCP_FLAGS.PSH, chunk);
-      conn.pendingOffset += sendSize;
-    }
+    const remaining = full.length - conn.pendingOffset;
+    const sendSize = Math.min(CHUNK_SIZE, remaining, available);
+    const connKey = `${conn.srcIp}:${conn.srcPort}→${conn.dstIp}:${conn.dstPort}`;
+    console.log(`[gw] TCP  DRAIN ${connKey}  offset=${conn.pendingOffset}/${full.length} window=${conn.recvWindow} avail=${available}`);
+    const chunk = full.slice(conn.pendingOffset, conn.pendingOffset + sendSize);
+    conn.send(TCP_FLAGS.ACK | TCP_FLAGS.PSH, chunk);
+    conn.pendingOffset += sendSize;
 
-    // All data sent
-    conn.pendingSend = null;
-    if (conn.onAllSent) {
-      const cb = conn.onAllSent;
-      conn.onAllSent = null;
-      cb();
+    if (conn.pendingOffset >= full.length) {
+      // All data sent — send FIN
+      conn.pendingSend = null;
+      if (conn.onAllSent) {
+        const cb = conn.onAllSent;
+        conn.onAllSent = null;
+        cb();
+      }
     }
+    // Don't loop — wait for Mac's ACK to trigger next drain
   }
 
   // ── Proxy fetch ───────────────────────────────────────────────────────────────
