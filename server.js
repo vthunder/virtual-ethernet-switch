@@ -272,6 +272,12 @@ class TcpConnection {
 
 // ── HTTP proxy ────────────────────────────────────────────────────────────────
 
+const REQUEST_TIMEOUT_MS = 60_000;
+
+// Keep-alive agents so TLS handshakes are reused across requests to the same host.
+const keepAliveAgent      = new http.Agent({ keepAlive: true });
+const keepAliveAgentHttps = new https.Agent({ keepAlive: true });
+
 function fetchHttp(method, url, headers, body, _redirects = 0) {
   return new Promise((resolve, reject) => {
     const parsed = new URL(url);
@@ -287,6 +293,8 @@ function fetchHttp(method, url, headers, body, _redirects = 0) {
         'Host': parsed.host,
         ...headers,
       },
+      agent: isHttps ? keepAliveAgentHttps : keepAliveAgent,
+      timeout: REQUEST_TIMEOUT_MS,
     };
     const req = lib.request(options, (res) => {
       if ([301, 302, 303, 307, 308].includes(res.statusCode) && res.headers.location && _redirects < 5) {
@@ -300,6 +308,7 @@ function fetchHttp(method, url, headers, body, _redirects = 0) {
       res.on('end', () => resolve({ status: res.statusCode, headers: res.headers, body: Buffer.concat(chunks) }));
     });
     req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error(`Request timeout (${REQUEST_TIMEOUT_MS / 1000}s)`)); });
     if (body) req.write(body);
     req.end();
   });
@@ -324,6 +333,8 @@ function fetchViaProxy(url, reqHeaders) {
         'User-Agent': (reqHeaders && reqHeaders['user-agent']) || 'Mozilla/2.02 (Macintosh; I; PPC)',
         'Accept': (reqHeaders && reqHeaders['accept']) || '*/*',
       },
+      agent: isHttps ? keepAliveAgentHttps : keepAliveAgent,
+      timeout: REQUEST_TIMEOUT_MS,
     };
 
     const transport = isHttps ? https : http;
@@ -337,6 +348,7 @@ function fetchViaProxy(url, reqHeaders) {
       }));
     });
     req.on('error', reject);
+    req.on('timeout', () => { req.destroy(new Error(`Request timeout (${REQUEST_TIMEOUT_MS / 1000}s)`)); });
     req.end();
   });
 }
