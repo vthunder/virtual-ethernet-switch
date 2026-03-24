@@ -294,10 +294,18 @@ export class JSVirtualGateway {
 
     if (isFin) {
       conn.clientSeq = (conn.clientSeq + 1) >>> 0;
-      conn.send(TCP_FLAGS.FIN | TCP_FLAGS.ACK);
-      conn.serverSeq = (conn.serverSeq + 1) >>> 0;
-      this.#tcpConns.delete(connKey);
-      console.log(`[gw] TCP  FIN  ${connKey} [closed]`);
+      if (conn.httpHandled) {
+        // HTTP/1.0 half-close: client done sending but we may still be fetching/sending response.
+        // Just ACK — don't send our FIN or delete connection yet.
+        // onAllSent will close the connection when the response is fully flushed.
+        conn.send(TCP_FLAGS.ACK);
+        console.log(`[gw] TCP  FIN  ${connKey} [half-close, awaiting response flush]`);
+      } else {
+        conn.send(TCP_FLAGS.FIN | TCP_FLAGS.ACK);
+        conn.serverSeq = (conn.serverSeq + 1) >>> 0;
+        this.#tcpConns.delete(connKey);
+        console.log(`[gw] TCP  FIN  ${connKey} [closed]`);
+      }
     }
   }
 
@@ -386,7 +394,10 @@ export class JSVirtualGateway {
     conn.pendingOffset = 0;
     conn.onAllSent = () => {
       conn.send(TCP_FLAGS.FIN | TCP_FLAGS.ACK);
+      conn.serverSeq = (conn.serverSeq + 1) >>> 0;
       conn.state = 'FIN_SENT';
+      this.#tcpConns.delete(`${conn.srcIp}:${conn.srcPort}→${conn.dstIp}:${conn.dstPort}`);
+      console.log(`[gw] TCP  FIN  ${conn.srcIp}:${conn.srcPort}→${conn.dstIp}:${conn.dstPort} [sent, connection closed]`);
     };
     this.#drainPending(conn);
   }
